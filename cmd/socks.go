@@ -5,14 +5,12 @@ import (
 	"log"
 	"net"
 	"net/netip"
-	"os"
 	"time"
 
 	"github.com/Diniboy1123/usque/api"
 	"github.com/Diniboy1123/usque/config"
 	"github.com/Diniboy1123/usque/internal"
 	"github.com/spf13/cobra"
-	"github.com/things-go/go-socks5"
 	"golang.zx2c4.com/wireguard/tun/netstack"
 )
 
@@ -188,43 +186,21 @@ var socksCmd = &cobra.Command{
 
 		go api.MaintainTunnel(context.Background(), tlsConfig, keepalivePeriod, initialPacketSize, endpoint, api.NewNetstackAdapter(tunDev), mtu, reconnectDelay)
 
-		var resolver socks5.NameResolver
+		var resolver *internal.TunnelDNSResolver
 		if localDNS {
-			resolver = internal.TunnelDNSResolver{TunNet: nil, DNSAddrs: dnsAddrs, Timeout: dnsTimeout}
+			resolver = &internal.TunnelDNSResolver{TunNet: nil, DNSAddrs: dnsAddrs, Timeout: dnsTimeout}
 		} else {
-			resolver = internal.TunnelDNSResolver{TunNet: tunNet, DNSAddrs: dnsAddrs, Timeout: dnsTimeout}
+			resolver = &internal.TunnelDNSResolver{TunNet: tunNet, DNSAddrs: dnsAddrs, Timeout: dnsTimeout}
 		}
 
-		var server *socks5.Server
-		if username == "" || password == "" {
-			server = socks5.NewServer(
-				socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-				socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return tunNet.DialContext(ctx, network, addr)
-				}),
-				socks5.WithResolver(resolver),
-			)
-		} else {
-			server = socks5.NewServer(
-				socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-				socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return tunNet.DialContext(ctx, network, addr)
-				}),
-				socks5.WithResolver(resolver),
-				socks5.WithAuthMethods(
-					[]socks5.Authenticator{
-						socks5.UserPassAuthenticator{
-							Credentials: socks5.StaticCredentials{
-								username: password,
-							},
-						},
-					},
-				),
-			)
+		server, err := internal.NewSOCKS5Server(net.JoinHostPort(bindAddress, port), username, password, resolver, tunNet)
+		if err != nil {
+			cmd.Printf("Failed to create SOCKS5 server: %v\n", err)
+			return
 		}
 
 		log.Printf("SOCKS proxy listening on %s:%s", bindAddress, port)
-		if err := server.ListenAndServe("tcp", net.JoinHostPort(bindAddress, port)); err != nil {
+		if err := server.Start(); err != nil {
 			cmd.Printf("Failed to start SOCKS proxy: %v\n", err)
 			return
 		}
