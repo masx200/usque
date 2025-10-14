@@ -149,7 +149,8 @@ func ParseIPFromEndpoint(endpoint string) (net.IP, error) {
 		}
 	}
 
-	host = strings.Trim(host, "[]")
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
 	if ip := net.ParseIP(host); ip != nil {
 		return ip, nil
 	}
