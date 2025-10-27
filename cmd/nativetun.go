@@ -149,14 +149,18 @@ var nativeTunCmd = &cobra.Command{
 			log.Println("Are you root/administrator? TUN device creation usually requires elevated privileges.")
 			log.Fatalf("Failed to create TUN device: %v", err)
 		}
+		defer dev.Close()
 
 		log.Printf("Created TUN device: %s", t.name)
 
-		go api.MaintainTunnel(context.Background(), tlsConfig, keepalivePeriod, initialPacketSize, endpoint, dev, mtu, reconnectDelay)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go api.MaintainTunnel(ctx, tlsConfig, keepalivePeriod, initialPacketSize, endpoint, dev, mtu, reconnectDelay)
 
 		log.Println("Tunnel established, you may now set up routing and DNS")
 
-		select {}
+		internal.WaitTerminateSignal()
 	},
 }
 

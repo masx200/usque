@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 
-	connectip "github.com/Diniboy1123/connect-ip-go"
 	"github.com/Diniboy1123/usque/internal"
 	"github.com/songgao/water"
 	"golang.zx2c4.com/wireguard/tun"
@@ -60,10 +60,12 @@ func NewNetBuffer(capacity int) *NetBuffer {
 // TunnelDevice abstracts a TUN device so that we can use the same tunnel-maintenance code
 // regardless of the underlying implementation.
 type TunnelDevice interface {
-	// ReadPacket reads a packet from the device (using the given mtu) and returns its contents.
+	// Reads a packet from the device (using the given mtu) and returns its contents.
 	ReadPacket(buf []byte) (int, error)
-	// WritePacket writes a packet to the device.
+	// Writes a packet to the device.
 	WritePacket(pkt []byte) error
+	// Сloses the tunnel device.
+	Close() error
 }
 
 // NetstackAdapter wraps a tun.Device (e.g. from netstack) to satisfy TunnelDevice.
@@ -98,6 +100,10 @@ func (n *NetstackAdapter) WritePacket(pkt []byte) error {
 	// Write expects a slice of packet buffers.
 	_, err := n.dev.Write([][]byte{pkt}, 0)
 	return err
+}
+
+func (n *NetstackAdapter) Close() error {
+	return n.dev.Close()
 }
 
 // NewNetstackAdapter creates a new NetstackAdapter.
@@ -136,6 +142,10 @@ func (w *WaterAdapter) ReadPacket(buf []byte) (int, error) {
 func (w *WaterAdapter) WritePacket(pkt []byte) error {
 	_, err := w.iface.Write(pkt)
 	return err
+}
+
+func (w *WaterAdapter) Close() error {
+	return w.iface.Close()
 }
 
 // NewWaterAdapter creates a new WaterAdapter.
@@ -188,6 +198,7 @@ func MaintainTunnel(ctx context.Context, tlsConfig *tls.Config, keepalivePeriod 
 
 		log.Println("Connected to MASQUE server")
 		errChan := make(chan error, 2)
+		closeChan := make(chan error, 2)
 
 		go func() {
 			for {
@@ -195,13 +206,17 @@ func MaintainTunnel(ctx context.Context, tlsConfig *tls.Config, keepalivePeriod 
 				n, err := device.ReadPacket(buf)
 				if err != nil {
 					packetBufferPool.Put(buf)
+					if errors.Is(err, os.ErrClosed) {
+						closeChan <- fmt.Errorf("connection closed while reading from TUN device: %v", err)
+						return
+					}
 					errChan <- fmt.Errorf("failed to read from TUN device: %v", err)
 					return
 				}
 				icmp, err := ipConn.WritePacket(buf[:n])
 				if err != nil {
 					packetBufferPool.Put(buf)
-					if errors.As(err, new(*connectip.CloseError)) {
+					if errors.Is(err, net.ErrClosed) {
 						errChan <- fmt.Errorf("connection closed while writing to IP connection: %v", err)
 						return
 					}
@@ -212,8 +227,8 @@ func MaintainTunnel(ctx context.Context, tlsConfig *tls.Config, keepalivePeriod 
 
 				if len(icmp) > 0 {
 					if err := device.WritePacket(icmp); err != nil {
-						if errors.As(err, new(*connectip.CloseError)) {
-							errChan <- fmt.Errorf("connection closed while writing ICMP to TUN device: %v", err)
+						if errors.Is(err, os.ErrClosed) {
+							closeChan <- fmt.Errorf("connection closed while writing ICMP to TUN device: %v", err)
 							return
 						}
 						log.Printf("Error writing ICMP to TUN device: %v, continuing...", err)
@@ -228,7 +243,7 @@ func MaintainTunnel(ctx context.Context, tlsConfig *tls.Config, keepalivePeriod 
 			for {
 				n, err := ipConn.ReadPacket(buf, true)
 				if err != nil {
-					if errors.As(err, new(*connectip.CloseError)) {
+					if errors.Is(err, net.ErrClosed) {
 						errChan <- fmt.Errorf("connection closed while reading from IP connection: %v", err)
 						return
 					}
@@ -236,21 +251,39 @@ func MaintainTunnel(ctx context.Context, tlsConfig *tls.Config, keepalivePeriod 
 					continue
 				}
 				if err := device.WritePacket(buf[:n]); err != nil {
+					if errors.Is(err, os.ErrClosed) {
+						closeChan <- fmt.Errorf("connection closed while writing to TUN device: %v", err)
+						return
+					}
 					errChan <- fmt.Errorf("failed to write to TUN device: %v", err)
 					return
 				}
 			}
 		}()
 
-		err = <-errChan
-		log.Printf("Tunnel connection lost: %v. Reconnecting...", err)
-		ipConn.Close()
-		if udpConn != nil {
-			udpConn.Close()
+		select {
+		case <-ctx.Done():
+			return
+		case err = <-errChan:
+			log.Printf("Tunnel connection lost: %v. Reconnecting...", err)
+			ipConn.Close()
+			if udpConn != nil {
+				udpConn.Close()
+			}
+			if tr != nil {
+				tr.Close()
+			}
+			time.Sleep(reconnectDelay)
+		case err = <-closeChan:
+			log.Printf("Tunnel device closed: %v. Aborting...", err)
+			ipConn.Close()
+			if udpConn != nil {
+				udpConn.Close()
+			}
+			if tr != nil {
+				tr.Close()
+			}
+			os.Exit(0)
 		}
-		if tr != nil {
-			tr.Close()
-		}
-		time.Sleep(reconnectDelay)
 	}
 }

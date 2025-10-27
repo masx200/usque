@@ -11,8 +11,11 @@ import (
 	"log"
 	"math/big"
 	"net"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/quic-go/quic-go"
@@ -315,4 +318,14 @@ func CheckIfname(name string) error {
 	}
 
 	return nil
+}
+
+// Handling and waiting for SIGINT, SIGTERM, SIGHUP and SIGQUIT signals from the OS
+func WaitTerminateSignal() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+
+	<-sigChan
+	signal.Stop(sigChan)
+	close(sigChan)
 }

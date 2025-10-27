@@ -3,63 +3,43 @@
 package internal
 
 import (
-	"fmt"
-	"log"
-	"os/exec"
+	"crypto/md5"
+	"net"
+	"syscall"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-func SetIPv4Address(ifaceName, ipAddr, mask string) error {
-	cmd := exec.Command("netsh", "interface", "ipv4", "set", "address",
-		fmt.Sprintf("name=\"%s\"", ifaceName),
-		"static", ipAddr, mask)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s", output)
-	}
-
-	log.Println("IPv4 address set successfully:", ipAddr)
-	return nil
+func AddIpAddress(luid uint64, ip net.IP) error {
+	var address = &MibUnicastIpAddressRow{}
+	InitializeUnicastIpAddressEntry(address)
+	address.Address.SetIP(ip)
+	address.InterfaceLuid = luid
+	address.DadState = IpDadStatePreferred
+	return CreateUnicastIpAddressEntry(address)
 }
 
-func SetIPv6Address(ifaceName, ipAddr, mask string) error {
-	cmd := exec.Command("netsh", "interface", "ipv6", "set", "address",
-		fmt.Sprintf("interface=\"%s\"", ifaceName),
-		ipAddr+"/"+mask)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s", output)
+func SetMTU(luid uint64, family int, mtu int) error {
+	entry := &MibIpInterfaceRow{}
+	entry.Family = uint16(family)
+	entry.InterfaceLuid = luid
+	GetIpInterfaceEntry(entry)
+	if entry.Family == syscall.AF_INET {
+		entry.SitePrefixLength = 0
 	}
-
-	log.Println("IPv6 address set successfully:", ipAddr)
-	return nil
+	entry.NlMtu = uint32(mtu)
+	return SetIpInterfaceEntry(entry)
 }
 
-func SetIPv4MTU(ifaceName string, mtu int) error {
-	cmd := exec.Command("netsh", "interface", "ipv4", "set", "subinterface",
-		fmt.Sprintf("\"%s\"", ifaceName),
-		fmt.Sprintf("mtu=%d", mtu))
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s", output)
-	}
-
-	log.Println("IPv4 MTU set successfully:", mtu)
-	return nil
-}
-
-func SetIPv6MTU(ifaceName string, mtu int) error {
-	cmd := exec.Command("netsh", "interface", "ipv6", "set", "subinterface",
-		fmt.Sprintf("\"%s\"", ifaceName),
-		fmt.Sprintf("mtu=%d", mtu))
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s", output)
-	}
-
-	log.Println("IPv6 MTU set successfully:", mtu)
-	return nil
+// NameToGuid convert TUN device name to GUID
+//
+// Parameters:
+//   - name: string - The interface name.
+//
+// Returns:
+//   - GUID: MD5 hash of name as GUID.
+func NameToGuid(name string) *windows.GUID {
+	sum := md5.Sum([]byte(name))
+	return (*windows.GUID)(unsafe.Pointer(&sum))
 }

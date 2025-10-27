@@ -186,7 +186,10 @@ var socksCmd = &cobra.Command{
 		}
 		defer tunDev.Close()
 
-		go api.MaintainTunnel(context.Background(), tlsConfig, keepalivePeriod, initialPacketSize, endpoint, api.NewNetstackAdapter(tunDev), mtu, reconnectDelay)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go api.MaintainTunnel(ctx, tlsConfig, keepalivePeriod, initialPacketSize, endpoint, api.NewNetstackAdapter(tunDev), mtu, reconnectDelay)
 
 		var resolver socks5.NameResolver
 		if localDNS {
@@ -223,11 +226,15 @@ var socksCmd = &cobra.Command{
 			)
 		}
 
-		log.Printf("SOCKS proxy listening on %s:%s", bindAddress, port)
-		if err := server.ListenAndServe("tcp", net.JoinHostPort(bindAddress, port)); err != nil {
-			cmd.Printf("Failed to start SOCKS proxy: %v\n", err)
-			return
-		}
+		go func() {
+			log.Printf("SOCKS proxy listening on %s:%s", bindAddress, port)
+			if err := server.ListenAndServe("tcp", net.JoinHostPort(bindAddress, port)); err != nil {
+				cmd.Printf("Failed to start SOCKS proxy: %v\n", err)
+				return
+			}
+		}()
+
+		internal.WaitTerminateSignal()
 	},
 }
 

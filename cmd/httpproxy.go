@@ -194,7 +194,10 @@ var httpProxyCmd = &cobra.Command{
 
 		resolver := internal.GetProxyResolver(localDNS, tunNet, dnsAddrs, dnsTimeout)
 
-		go api.MaintainTunnel(context.Background(), tlsConfig, keepalivePeriod, initialPacketSize, endpoint, api.NewNetstackAdapter(tunDev), mtu, reconnectDelay)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		go api.MaintainTunnel(ctx, tlsConfig, keepalivePeriod, initialPacketSize, endpoint, api.NewNetstackAdapter(tunDev), mtu, reconnectDelay)
 
 		server := &http.Server{
 			Addr: net.JoinHostPort(bindAddress, port),
@@ -213,10 +216,14 @@ var httpProxyCmd = &cobra.Command{
 			}),
 		}
 
-		log.Printf("HTTP proxy listening on %s:%s\n", bindAddress, port)
-		if err := server.ListenAndServe(); err != nil {
-			cmd.Printf("Failed to start HTTP proxy: %v\n", err)
-		}
+		go func() {
+			log.Printf("HTTP proxy listening on %s:%s\n", bindAddress, port)
+			if err := server.ListenAndServe(); err != nil {
+				cmd.Printf("Failed to start HTTP proxy: %v\n", err)
+			}
+		}()
+
+		internal.WaitTerminateSignal()
 	},
 }
 
