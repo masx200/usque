@@ -11,8 +11,9 @@ import (
 	"net/http"
 
 	connectip "github.com/Diniboy1123/connect-ip-go"
-	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/http3"
+	"github.com/Diniboy1123/usque/internal/congestion"
+	"github.com/apernet/quic-go"
+	"github.com/apernet/quic-go/http3"
 	"github.com/yosida95/uritemplate/v3"
 )
 
@@ -118,6 +119,9 @@ func ConnectTunnel(ctx context.Context, tlsConfig *tls.Config, quicConfig *quic.
 	if err != nil {
 		return udpConn, nil, nil, nil, err
 	}
+
+	// Enable BBR congestion control
+	congestion.UseBBR(conn)
 
 	tr := &http3.Transport{
 		EnableDatagrams: true,
